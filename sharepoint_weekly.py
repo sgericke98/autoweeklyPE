@@ -1,31 +1,20 @@
 #!/usr/bin/env python3
 """
-SharePoint Weekly - Duplicate folder + rename (APP-ONLY, confidential client)
+SharePoint Weekly PE Updates Automation
 
-Qué hace:
-1) Duplica una carpeta origen de SharePoint en el mismo padre,
-   nombrando la nueva "W.E. %b %d %Y" (ej. "W.E. Sep 03 2025") en Europe/Madrid.
-2) Renombra todos los archivos de primer nivel dentro de la carpeta nueva:
-   - De: "11 Apr - EQT Project Updates.pptx"
-   - A : "03 Sep - EQT Project Updates.pptx" (usando la fecha de hoy).
+Automatically creates weekly PE update folders by:
+1. Finding the most recently modified folder in the specified SharePoint path
+2. Duplicating that folder with a new name based on the next Friday's date
+3. Renaming all PowerPoint files with the correct date prefix
+4. Updating slide 1 dates in all PPTX files
+5. Sending notification email with team assignments
 
-Autenticación:
-- Microsoft Graph con **Application permissions** (app-only) usando client secret.
-- Necesitas dar a la app Application Permissions en Graph:
-  - Opción rápida: Sites.ReadWrite.All + Admin consent.
-  - Opción segura: Sites.Selected + Admin consent + dar acceso al sitio vía Graph o PnP.
+Authentication:
+- Microsoft Graph with Application permissions (app-only) using client secret
+- Required permissions: Sites.ReadWrite.All + Mail.Send (with admin consent)
 
-Config (.env):
-TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-CLIENT_SECRET=your_super_secret
-SP_HOSTNAME=techtorch.sharepoint.com
-SP_SITE_PATH=/sites/DMTolls
-SP_LIBRARY_NAME=Documents
-SP_SOURCE_FOLDER_PATH=Delivery Excellence/MVP DeliveryHub/Delivery/TESTWeekly PE Updates/W.E. Sept 5 2025
-
-Dependencias:
-pip install msal python-dotenv requests pytz
+Dependencies:
+pip install msal python-dotenv requests pytz python-pptx
 """
 
 import os
@@ -33,38 +22,46 @@ import re
 import time
 import json
 import sys
-from datetime import datetime
-from typing import Optional
-from pptx import Presentation
+from datetime import datetime, timedelta
+from typing import Optional, Any
+from urllib.parse import quote
 from io import BytesIO
-from pptx.util import Pt
-
 
 import pytz
 import requests
 from msal import ConfidentialClientApplication
 from dotenv import load_dotenv
-from typing import Optional, Any
-from datetime import datetime, timedelta
+from pptx import Presentation
+from pptx.util import Pt
 
 
 
 GRAPH = "https://graph.microsoft.com/v1.0"
 
-# ------------------------ Utilidades de logging y ENV -------------------------
+# ------------------------ Utilities -------------------------
 
 def log(msg: str) -> None:
+    """Log message with timestamp."""
     print(f"[{datetime.now().isoformat(timespec='seconds')}] {msg}", flush=True)
 
 def require_env(name: str) -> str:
+    """Get required environment variable or raise error."""
     v = os.getenv(name)
     if not v:
         raise RuntimeError(f"Missing required environment variable: {name}")
     return v
 
-# ------------------------------- Autenticación -------------------------------
+def _next_friday(dt: datetime) -> datetime:
+    """Calculate the next Friday from the given date."""
+    days_ahead = (4 - dt.weekday()) % 7
+    if days_ahead == 0:
+        days_ahead = 7  # if today is Friday, pick the Friday of next week
+    return dt + timedelta(days=days_ahead)
+
+# ------------------------ Authentication ------------------------
 
 def get_token_app_only(tenant_id: str, client_id: str, client_secret: str) -> str:
+    """Get Microsoft Graph app-only access token."""
     app = ConfidentialClientApplication(
         client_id=client_id,
         client_credential=client_secret,
@@ -76,31 +73,27 @@ def get_token_app_only(tenant_id: str, client_id: str, client_secret: str) -> st
     return result["access_token"]
 
 def gget(token: str, url: str, **kwargs) -> requests.Response:
+    """GET request to Microsoft Graph API."""
     r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, **kwargs)
     if not r.ok:
         raise RuntimeError(f"GET {url} -> {r.status_code} {r.text}")
     return r
 
 def gpost(token: str, url: str, **kwargs) -> requests.Response:
+    """POST request to Microsoft Graph API."""
     r = requests.post(url, headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, **kwargs)
     if r.status_code not in (200, 201, 202):
         raise RuntimeError(f"POST {url} -> {r.status_code} {r.text}")
     return r
 
 def gpatch(token: str, url: str, **kwargs) -> requests.Response:
+    """PATCH request to Microsoft Graph API."""
     r = requests.patch(url, headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, **kwargs)
     if not r.ok:
         raise RuntimeError(f"PATCH {url} -> {r.status_code} {r.text}")
     return r
 
-def _next_friday(dt: datetime) -> datetime:
-    # Monday=0 … Friday=4
-    days_ahead = (4 - dt.weekday()) % 7
-    if days_ahead == 0:
-        days_ahead = 7  # if today is Friday, pick the Friday of next week
-    return dt + timedelta(days=days_ahead)
-
-# ------------------------ Resolución de sitio y drive ------------------------
+# ------------------------ SharePoint Operations ------------------------
 
 def resolve_site_id(token: str, hostname: str, site_path: str) -> str:
     url = f"{GRAPH}/sites/{hostname}:{site_path}"
@@ -123,10 +116,59 @@ def find_drive_id(token: str, site_id: str, library_name: str) -> str:
     raise RuntimeError(f"Drive '{library_name}' not found. Found: {[d.get('name') for d in drives]}")
 
 def get_item_by_path(token: str, drive_id: str, path: str) -> dict:
-    url = f"{GRAPH}/drives/{drive_id}/root:/{path}"
+    # Try URL encoding the path
+    encoded_path = quote(path, safe='/')
+    url = f"{GRAPH}/drives/{drive_id}/root:/{encoded_path}"
     return gget(token, url).json()
 
-# ------------------------------ Copia de carpeta -----------------------------
+
+def find_latest_folder_by_modified_date(token: str, drive_id: str, parent_path: str) -> dict:
+    """
+    Finds the most recently modified folder in the given parent path.
+    Returns the folder item with the latest lastModifiedDateTime.
+    """
+    # Get the folder item first to get its ID
+    path_variations = [
+        parent_path,  # Original path
+        parent_path.replace(' ', '%20'),  # Manual URL encoding
+        quote(parent_path, safe='/'),  # Python URL encoding
+    ]
+    
+    folder_item = None
+    for path_variant in path_variations:
+        try:
+            url = f"{GRAPH}/drives/{drive_id}/root:/{path_variant}"
+            r = gget(token, url)
+            folder_item = r.json()
+            if folder_item.get("folder") is not None:
+                break
+        except Exception:
+            continue
+    
+    if not folder_item or folder_item.get("folder") is None:
+        raise RuntimeError(f"Could not find parent folder: {parent_path}")
+    
+    folder_id = folder_item["id"]
+    
+    # Get all children (both files and folders) using the folder ID
+    url = f"{GRAPH}/drives/{drive_id}/items/{folder_id}/children"
+    r = gget(token, url)
+    children = r.json().get("value", [])
+    
+    # Filter to only folders
+    folders = [child for child in children if child.get("folder")]
+    
+    if not folders:
+        raise RuntimeError(f"No folders found in path: {parent_path}")
+    
+    # Sort by lastModifiedDateTime
+    sorted_folders = sorted(folders, key=lambda x: x.get('lastModifiedDateTime', ''), reverse=True)
+    latest_folder = sorted_folders[0]
+    
+    log(f"Found {len(folders)} folders, using latest: {latest_folder.get('name')}")
+    return latest_folder
+
+# ------------------------ Folder Operations ------------------------
 
 def copy_folder_with_name(token: str, drive_id: str, source_item_id: str, parent_id: str, new_name: str) -> None:
     url = f"{GRAPH}/drives/{drive_id}/items/{source_item_id}/copy"
@@ -175,7 +217,7 @@ def list_children(token: str, drive_id: str, folder_id: str) -> list[dict]:
             break
     return items
 
-# ------------------------- Nombres y renombrado de files ---------------------
+# ------------------------ File Operations ------------------------
 
 MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
 
@@ -226,7 +268,7 @@ def rename_item_with_collision_retry(token: str, drive_id: str, item_id: str, ne
             raise RuntimeError(f"PATCH rename -> {r.status_code} {r.text}")
     raise RuntimeError(f"Could not rename after {max_tries} attempts.")
 
-# ---------- Date formatting for slides ----------
+# ------------------------ PowerPoint Operations ------------------------
 def today_slide_date(prefer_sept_with_t: bool = True, tz_name: str = "Europe/Madrid") -> str:
     tz = pytz.timezone(tz_name)
     now = datetime.now(tz)
@@ -266,7 +308,7 @@ def replace_week_ending_text(text: str, new_date_label: str) -> tuple[str, bool]
             changed = True
     return new_text, changed
 
-# ---------- Graph file download/upload ----------
+# ------------------------ File Transfer ------------------------
 def download_item_bytes(token: str, drive_id: str, item_id: str) -> bytes:
     url = f"{GRAPH}/drives/{drive_id}/items/{item_id}/content"
     r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, allow_redirects=True)
@@ -293,7 +335,7 @@ def upload_item_bytes(token: str, drive_id: str, item_id: str, data: bytes) -> N
             raise RuntimeError(f"Upload chunk failed {rr.status_code}: {rr.text}")
         i = j
 
-# ---------- PPTX edit (slide 1 only) ----------
+# ------------------------ PowerPoint Editing ------------------------
 def update_pptx_first_slide_date(ppt_bytes: bytes, new_date_label: str) -> tuple[bytes, bool]:
     prs = Presentation(BytesIO(ppt_bytes))
     if len(prs.slides) == 0:
@@ -413,7 +455,7 @@ def _rewrite_textframe_preserving_style(tf, text: str, font_name, font_size, par
         p.text = line
         _format_paragraph(p)
 
-# ------------------------------ Mail helpers ---------------------------------
+# ------------------------ Email Operations ------------------------
 
 def get_item_fields(token: str, drive_id: str, item_id: str, select: str = "id,name,webUrl") -> dict:
     url = f"{GRAPH}/drives/{drive_id}/items/{item_id}?$select={select}"
@@ -461,7 +503,8 @@ def send_mail_app_only(
     gpost(token, url, data=json.dumps(payload))
 
 
-# --------------------------------- Main --------------------------------------
+# ------------------------ Main Execution ------------------------
+
 
 def main():
     load_dotenv()
@@ -485,13 +528,40 @@ def main():
     drive_id = find_drive_id(token, site_id, sp_library)
     log(f"Drive id: {drive_id}")
 
+
     log("Locating source folder…")
-    source_item = get_item_by_path(token, drive_id, source_folder_path)
-    if source_item.get("folder") is None:
-        raise RuntimeError("SP_SOURCE_FOLDER_PATH is not a folder.")
-    parent_id = source_item["parentReference"]["id"]
-    source_id = source_item["id"]
-    log(f"Source folder id: {source_id} (parent {parent_id})")
+    try:
+        # Try multiple path formats for the initial path check
+        path_variations = [
+            source_folder_path,  # Original path
+            source_folder_path.replace(' ', '%20'),  # Manual URL encoding
+            quote(source_folder_path, safe='/'),  # Python URL encoding
+        ]
+        
+        source_item = None
+        for path_variant in path_variations:
+            try:
+                source_item = get_item_by_path(token, drive_id, path_variant)
+                if source_item.get("folder") is not None:
+                    log(f"Found source folder: {source_item.get('name')}")
+                    break
+            except Exception as e:
+                log(f"Failed to access path variant: {e}")
+                continue
+        
+        if source_item is None or source_item.get("folder") is None:
+            raise RuntimeError(f"Source folder not found: {source_folder_path}")
+        
+        log("Finding latest modified folder in source path…")
+        latest_folder = find_latest_folder_by_modified_date(token, drive_id, source_folder_path)
+        source_id = latest_folder["id"]
+        source_folder_name = latest_folder["name"]
+        # Use the parent ID of the latest folder, not the source folder
+        parent_id = latest_folder["parentReference"]["id"]
+        log(f"Using latest folder: {source_folder_name}")
+    except Exception as e:
+        log(f"Error locating source folder: {e}")
+        raise
 
     log(f"Copying folder as '{new_folder_name}'…")
     copy_folder_with_name(token, drive_id, source_id, parent_id, new_folder_name)
@@ -516,7 +586,7 @@ def main():
         else:
             log(f"Skipping folder: {it.get('name')}")
     log(f"Done. Files renamed: {renamed}")
-        # ... after: log(f"Done. Files renamed: {renamed}")
+    
     log("Updating slide 1 date in PPTX files…")
     updated = update_pptx_dates_in_folder(token, drive_id, new_folder_id)
     log(f"Done. PPTX files updated: {updated}")
