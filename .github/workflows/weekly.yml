@@ -1,0 +1,55 @@
+name: SharePoint Weekly
+
+on:
+  # Run every Wednesday at 09:00 Madrid local time:
+  # - Mar–Oct (CEST, UTC+2): 07:00 UTC
+  # - Nov–Feb (CET,  UTC+1): 08:00 UTC
+  schedule:
+    - cron: "0 7 * 3-10 3"   # Mar–Oct (months 3..10), Wednesdays at 07:00 UTC
+    - cron: "0 8 * 11-12 3"  # Nov–Dec, Wednesdays at 08:00 UTC
+    - cron: "0 8 * 1-2 3"    # Jan–Feb, Wednesdays at 08:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: weekly-sharepoint
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install msal python-dotenv requests pytz python-pptx
+
+      - name: Create .env from GitHub Secrets
+        run: |
+          cat > .env <<'EOF'
+          TENANT_ID=${{ secrets.TENANT_ID }}
+          CLIENT_ID=${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET=${{ secrets.CLIENT_SECRET }}
+          SP_HOSTNAME=${{ secrets.SP_HOSTNAME }}
+          SP_SITE_PATH=${{ secrets.SP_SITE_PATH }}
+          SP_LIBRARY_NAME=${{ secrets.SP_LIBRARY_NAME }}
+          SP_SOURCE_FOLDER_PATH=${{ secrets.SP_SOURCE_FOLDER_PATH }}
+          MAIL_SENDER_UPN=${{ secrets.MAIL_SENDER_UPN }}
+          MAIL_TO=${{ secrets.MAIL_TO }}
+          MAIL_CC=${{ secrets.MAIL_CC }}
+          MAIL_BCC=${{ secrets.MAIL_BCC }}
+          EOF
+
+      - name: Run job (Europe/Madrid logs)
+        env:
+          TZ: Europe/Madrid
+        run: |
+          # change script filename below if yours differs
+          python sharepoint_weekly.py
