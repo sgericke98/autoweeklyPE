@@ -1,0 +1,25 @@
+# SharePoint Weekly PE Updates Automation Dependencies
+
+# Microsoft Graph API and Authentication
+msal>=1.24.0
+requests>=2.31.0
+
+# Environment Configuration
+python-dotenv>=1.0.0
+
+# Date and Time Handling
+pytz>=2023.3
+
+# PowerPoint File Processing
+python-pptx>=0.6.21
+
+# Standard Library Dependencies (included with Python)
+# - os
+# - re
+# - time
+# - json
+# - sys
+# - datetime
+# - typing
+# - urllib.parse
+# - io
