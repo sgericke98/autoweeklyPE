@@ -610,7 +610,7 @@ def main():
         <p>Please see linked below the folder where all the ✨new PPTs ✨ for this week live! Please find the slides for your clients, organized by PE firm, and make all updates for progress from this week. Let me know when updates are completed – I will be aiming to send PDFs to Jordi on Friday afternoon EST.</p>
         <p><a href="{folder_link}">{folder_name}</a></p>
         <ol>
-          <li><span style="background-color: #f0f0f0;">@Samantha Starr</span> can you please update <b>Benevity, Avetta, Calabrio & TurboTax/Bain</b></li>
+          <li><span style="background-color: #f0f0f0;">@Samantha Starr</span> can you please update <b>Benevity, Calabrio, Olo, RCYC & Apryse</b></li>
           <li><span style="background-color: #f0f0f0;">@Ash Shah</span> please confirm updates (if any) for <b>HVD</b> and <b>ClearCourse</b></li>
           <li><span style="background-color: #f0f0f0;">@Tim Hegwood</span> can you please provide updates for <b>Intel471</b></li>
           <li><span style="background-color: #f0f0f0;">@Marina Rodriguez</span> can you please update for <b>Waystone Data</b></li>
@@ -619,10 +619,11 @@ def main():
           <li><span style="background-color: #f0f0f0;">@Julio Saiz</span> please provide updates for <b>USU</b></li>
           <li><span style="background-color: #f0f0f0;">@Luis Guillermo Salazar Madriz</span> please provide update for <b>Hypergene</b></li>
           <li><span style="background-color: #f0f0f0;">@Marta Ulanecka</span> can you please provide updates for <b>Lunanet, Mercell, AEA</b></li>
-          <li><span style="background-color: #f0f0f0;">@Jake Harris</span> please provide updates for <b>Caseware</b></li>
+          <li><span style="background-color: #f0f0f0;">@Liz Shelton</span> please review & confirm updates for <b>Caseware</b></li>
+          <li><span style="background-color: #f0f0f0;">@Matthew Cisneros</span> please provide updates for <b>BillTrust</b></li>
           <li><span style="background-color: #f0f0f0;">@Nathan Lewis</span> please provide updates for <b>Suvoda</b></li>
           <li><span style="background-color: #f0f0f0;">@Kurt Mansperger</span> can you please update for <b>Magnet Forensics</b></li>
-          <li><span style="background-color: #f0f0f0;">@Liz Shelton</span> can you please provide updates for <b>BillTrust</b></li>
+          <li><span style="background-color: #f0f0f0;">@Ryan Soifer</span> can you please provide updates for <b>Keystone Partners</b></li>
         </ol>
         <p><span style="font-weight: bold; text-decoration: underline;">Reminders:</span></p>
         <ol>
